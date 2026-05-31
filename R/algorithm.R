@@ -1,4 +1,4 @@
-#' Moment-based Selection for Multivariate Mixed-Effects Models (MORES)
+#' Moment-based Selection for Multivariate Mixed-Effects Models (MOMENT)
 #'
 #' Fit a multivariate high-dimensional mixed-effects model with variable
 #' selection using the proposed moment-based convex optimization algorithm.
@@ -84,11 +84,11 @@
 #'
 #' lambdas <- c(200,200,200)
 #' tau <- 0.2
-#' result <- MORES(Y,Z,X,lambdas,tau,id = id)
+#' result <- MOMENT(Y,Z,X,lambdas,tau,id = id)
 #' }
 #'
 #' @export
-MORES <- function(Y,Z,X,lambdas,tau,threshold=0.01,gamma=2,gamma.weight=2,eta=NULL,d=NULL,p=NULL,q=NULL,id,deltaB=0,deltaE=1e-4,
+MOMENT <- function(Y,Z,X,lambdas,tau,threshold=0.01,gamma=2,gamma.weight=2,eta=NULL,d=NULL,p=NULL,q=NULL,id,deltaB=0,deltaE=1e-4,
                   max.iter=1,tol=1e-2,max.iterB=1000,tolB=1e-8,
                   sigmaB=NULL,beta=NULL,y.dbsum=NULL,ww.trisum=NULL,y.trisum=NULL,ww.trisum.d=NULL,y.trisum.d=NULL,bootstrap.iter=30){
   id <- as.character(id)
@@ -121,12 +121,7 @@ MORES <- function(Y,Z,X,lambdas,tau,threshold=0.01,gamma=2,gamma.weight=2,eta=NU
     ww.trisum.d <- triple_sum_ww(as.matrix(Z),nis,m,d,q)
   }
   if (is.null(eta) == TRUE){
-    if (nrow(ww.trisum) <= 2){
-      L <- norm(ww.trisum,"2")
-    }
-    else{
-      L <- eigs(ww.trisum, k = 1, which = "LM")$values
-    }
+    L <- largest_eigenvalue(ww.trisum)
     eta <- 1/L
   }
 

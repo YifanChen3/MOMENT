@@ -1,8 +1,8 @@
-#' Cross-validation for MORES
+#' Cross-validation for MOMENT
 #'
 #' Perform cross-validation over a sequence of \code{lambda}
 #' values (per response) and \code{tau} values to select tuning parameters for
-#' the MORES algorithm.
+#' the MOMENT algorithm.
 #'
 #' The function first selects the random-effects structure for each response,
 #' then refits the covariance matrices and finally tunes the fixed-effects
@@ -88,13 +88,13 @@
 #' length.out <- 30
 #' taus <- seq(tau.max,tau.min,length.out=length.out)
 #'
-#' result.sim <- MORES.cv(
+#' result.sim <- MOMENT.cv(
 #'   Y,Z,X,lambdas,taus,id = id,
 #'   sigmaB = sigmaB,sigmaE = sigmaE,beta=beta,alpha = 1
 #'   )
 #' }
 #'
-#' @useDynLib MORES, .registration = TRUE
+#' @useDynLib MOMENT, .registration = TRUE
 #' @importFrom Rcpp evalCpp
 #' @import Matrix
 #' @importFrom RSpectra eigs
@@ -102,7 +102,8 @@
 #' @importFrom stats rnorm sd
 #' @importFrom methods as
 #' @export
-MORES.cv <- function(Y,Z,X,lambda.path,tau.path,threshold=0.01,folds=5,id,gamma=2,gamma.weight=2,alpha=1,sigmaB=NULL,sigmaE=NULL,beta=NULL,eta=NULL,max.iterB=1000,tolB=1e-4,bootstrap.iter=30){
+MOMENT.cv <- function(Y,Z,X,lambda.path,tau.path,threshold=0.01,folds=5,id,gamma=2,gamma.weight=2,alpha=1,
+                     sigmaB=NULL,sigmaE=NULL,beta=NULL,eta=NULL,max.iterB=1000,tolB=1e-4,bootstrap.iter=30){
   lambda.path <- sort(lambda.path,decreasing = TRUE)
   id <- as.character(id)
   ord <- order(match(id, unique(id)))
@@ -132,93 +133,12 @@ MORES.cv <- function(Y,Z,X,lambda.path,tau.path,threshold=0.01,folds=5,id,gamma=
   ww.trisum.d <- triple_sum_ww(as.matrix(Z),nis,m,d,q)
   diag.vec <- diag(updateSigmaB(sigmaB=NULL,eta=NULL,ww.trisum.d,y.trisum.d,lambda.i=0,Y,Z,d,q,delta=0,max.iterB,tolB)$sigmaB)
 
-  lambda.lmax.list <- numeric(d)
-  lambda.optimal.list <- numeric(d)
   ww.trisum <- NULL
   eta <- NULL
   active.set.vec <- NULL
   active.set.mat <- NULL
-  ww.trisum.all <- triple_sum_ww(as.matrix(Z),nis,m,d=1,q)
+  wt <- 1/(diag.vec^gamma.weight)
 
-  for (l in 1:d){
-    Y_l <- as.matrix(Y[,l])
-    diag_l <- diag.vec[(1+(l-1)*q):(l*q)]
-    weight_l <- 1/(diag_l^gamma.weight)
-    for (fold in 1:folds) {
-      if (fold == 1){
-        y.test <- Y_l[1:cumsum(nis)[test.size],]
-        y.train <- Y_l[-c(1:cumsum(nis)[test.size]),]
-        x.test <- X[1:cumsum(nis)[test.size],]
-        x.train <- X[-c(1:cumsum(nis)[test.size]),]
-        z.test <- Z[1:cumsum(nis)[test.size], ((fold-1)*test.size*q+1):(fold*test.size*q)]
-        z.train <- Z[-c(1:cumsum(nis)[test.size]), -c(((fold-1)*test.size*q+1):(fold*test.size*q))]
-      }
-      else {
-        y.test <- Y_l[(cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size],]
-        y.train <- Y_l[-c((cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size]),]
-        x.test <- X[(cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size],]
-        x.train <- X[-c((cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size]),]
-        z.test <- Z[(cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size], ((fold-1)*test.size*q+1):(fold*test.size*q)]
-        z.train <- Z[-c((cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size]), -c(((fold-1)*test.size*q+1):(fold*test.size*q))]
-      }
-
-      nis.test <- nis[((fold-1)*test.size+1):(fold*test.size)]
-      nis.train <- nis[-c(((fold-1)*test.size+1):(fold*test.size))]
-      m.train <- length(nis.train)
-      bbeta <- solve(t(as.matrix(x.train)) %*% as.matrix(x.train), t(as.matrix(x.train)) %*% as.matrix(y.train))
-      if (l == 1){
-        ww.trisum[[fold]] <- triple_sum_ww(as.matrix(z.train),nis.train,m.train,d=1,q)
-        if (nrow(ww.trisum[[fold]]) <= 2){
-          L <- norm(ww.trisum[[fold]],"2")
-        }
-        else{
-          L <- eigs(ww.trisum[[fold]], k = 1, which = "LM")$values
-        }
-        eta[[fold]] <- 1/L
-      }
-      y.trisum <- triple_sum_y(as.matrix(y.train),as.matrix(z.train),as.matrix(x.train),bbeta,nis.train,m.train,d=1,q)
-      y.dbsum <- double_sum_y(as.matrix(y.train),as.matrix(x.train),bbeta,nis.train,m.train,d=1)
-
-      sol.path <- sigma.path(as.matrix(y.train),as.matrix(z.train),as.matrix(x.train),lambda.path,eta[[fold]],nis.train,d=1,q,
-                             weight=weight_l,ww.trisum[[fold]],y.trisum,y.dbsum,max.iterB=max.iterB,tolB=tolB)
-      sigmaB.path <- sol.path$sigmaB.path
-      sigmaE.path <- sol.path$sigmaE.path
-
-      for (lambda.index in 1:length(lambda.path)) {
-        l.lambda[lambda.index,fold] <- likelihood(as.matrix(y.test),as.matrix(z.test),as.matrix(x.test),
-                                                  sigmaB.path[[lambda.index]],sigmaE.path[[lambda.index]],bbeta,nis.test,d=1,q)
-      }
-      cat("Fold", fold, "lambda completed\n")
-    }
-
-    l.mean <- apply(l.lambda, 1, mean)
-    l.max <- max(l.mean)
-    l.max.index <- which.max(l.mean)
-    lambda.lmax <- lambda.path[l.max.index]
-    lambda.lmax.list[l] <- lambda.lmax
-
-    l.se <- sd(l.lambda[l.max.index,])/sqrt(folds)
-    l.optimal.index <- which(l.mean >= l.max - alpha * l.se)[1]
-    lambda.optimal <- lambda.path[l.optimal.index]
-    lambda.optimal.list[l] <- lambda.optimal
-
-    lambda.weight.l <- lambda.optimal * diag(weight_l)
-    y.trisum.all <- triple_sum_y(as.matrix(Y_l),as.matrix(Z),as.matrix(X),as.matrix(beta.d[,l]),nis,m,d=1,q)
-    sigmaB.select <- updateSigmaB(sigmaB.path[[l.optimal.index]],eta=NULL,ww.trisum.all,y.trisum.all,lambda.weight.l,Y_l,Z,d=1,q,delta=0,max.iterB,tolB)
-    sigmaB_l <- sigmaB.select$sigmaB
-    active.set.mat[[l]] <- which(diag(sigmaB_l) > threshold)
-    active.set.vec <- c(active.set.vec,(active.set.mat[[l]]+q*(l-1)))
-  }
-
-  #Estimate Sigma_B
-  n <- length(active.set.vec)
-  sigmaB.hat <- estimateSigmaB(sigmaB=NULL,eta=NULL,Y,X,Z,beta.d,delta=0,active.set.vec,active.set.mat,n,nis,m,d,q)$sigmaB
-
-  #Estimate Sigma_e
-  y.dbsum.all <- double_sum_y(Y,X,beta.d,nis,m,d)
-  sigmaE.hat <- updateSigmaE(y.dbsum.all,Z,sigmaB.hat,nis,m,d,N,q,delta=1e-4)
-
-  #cv for beta
   for (fold in 1:folds) {
     if (fold == 1){
       y.test <- Y[1:cumsum(nis)[test.size],]
@@ -236,26 +156,104 @@ MORES.cv <- function(Y,Z,X,lambda.path,tau.path,threshold=0.01,folds=5,id,gamma=
       z.test <- Z[(cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size], ((fold-1)*test.size*q+1):(fold*test.size*q)]
       z.train <- Z[-c((cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size]), -c(((fold-1)*test.size*q+1):(fold*test.size*q))]
     }
+
     nis.test <- nis[((fold-1)*test.size+1):(fold*test.size)]
     nis.train <- nis[-c(((fold-1)*test.size+1):(fold*test.size))]
+    m.train <- length(nis.train)
     bbeta <- solve(t(as.matrix(x.train)) %*% as.matrix(x.train), t(as.matrix(x.train)) %*% as.matrix(y.train))
+    ww.trisum[[fold]] <- triple_sum_ww(as.matrix(z.train),nis.train,m.train,d,q)
+    L <- largest_eigenvalue(ww.trisum[[fold]])
+    eta[[fold]] <- 1/L
+    y.trisum <- triple_sum_y(as.matrix(y.train),as.matrix(z.train),as.matrix(x.train),bbeta,nis.train,m.train,d,q)
+    y.dbsum <- double_sum_y(as.matrix(y.train),as.matrix(x.train),bbeta,nis.train,m.train,d)
 
-    bbeta.path <- beta.path(as.matrix(y.train),as.matrix(z.train),as.matrix(x.train),tau.path,gamma,sigmaB.hat,sigmaE.hat,bbeta,nis.train,d,p,q,bootstrap.iter)
+    sol.path <- sigma.path(as.matrix(y.train),as.matrix(z.train),as.matrix(x.train),lambda.path,eta[[fold]],nis.train,d,q,
+                           weight=wt,ww.trisum[[fold]],y.trisum,y.dbsum,max.iterB=max.iterB,tolB=tolB)
+    sigmaB.path <- sol.path$sigmaB.path
+    sigmaE.path <- sol.path$sigmaE.path
 
-    for (tau.index in 1:length(tau.path)) {
-      l.tau[tau.index,fold] <- likelihood(as.matrix(y.test),as.matrix(z.test),as.matrix(x.test),
-                                          sigmaB.hat,sigmaE.hat,bbeta.path[[tau.index]],nis.test,d,q)
+    for (lambda.index in 1:length(lambda.path)) {
+      l.lambda[lambda.index,fold] <- likelihood(as.matrix(y.test),as.matrix(z.test),as.matrix(x.test),
+                                                sigmaB.path[[lambda.index]],sigmaE.path[[lambda.index]],bbeta,nis.test,d,q)
     }
-    cat("Fold", fold, "tau completed\n")
+    cat("Fold", fold, "lambda completed\n")
   }
 
-  l.max.index <- which.max(apply(l.tau, 1, mean))
-  tau.optimal <- tau.path[l.max.index]
+  l.mean <- apply(l.lambda, 1, mean)
+  l.max <- max(l.mean)
+  l.max.index <- which.max(l.mean)
+  lambda.lmax <- lambda.path[l.max.index]
 
-  beta.hat <- updateBeta(Y,X,Z,tau.optimal,gamma,sigmaB.hat,sigmaE.hat,nis,d,p,q,N,bootstrap.iter)
+  l.se <- sd(l.lambda[l.max.index,])/sqrt(folds)
+  l.optimal.index <- which(l.mean >= l.max - alpha * l.se)[1]
+  lambda.optimal <- lambda.path[l.optimal.index]
+
+  lambda.weight <- lambda.optimal * diag(wt)
+  sigmaB.select <- updateSigmaB(sigmaB.path[[l.optimal.index]],eta=NULL,ww.trisum.d,y.trisum.d,lambda.weight,Y,Z,d,q,delta=0,max.iterB,tolB)$sigmaB
+  active.set.vec <- which(diag(sigmaB.select) > threshold)
+  block  <- ceiling(active.set.vec / q)
+  local  <- active.set.vec - (block - 1) * q
+  active.set.mat <- vector("list", d)
+  for(i in seq_along(active.set.vec)){
+    active.set.mat[[block[i]]] <- c(active.set.mat[[block[i]]], local[i])
+  }
+
+
+  #Estimate Sigma_B
+  n <- length(active.set.vec)
+  sigmaB.hat <- estimateSigmaB(sigmaB=NULL,eta=NULL,Y,X,Z,beta.d,delta=0,active.set.vec,active.set.mat,n,nis,m,d,q)$sigmaB
+
+  #Estimate Sigma_e
+  y.dbsum.all <- double_sum_y(Y,X,beta.d,nis,m,d)
+  sigmaE.hat <- updateSigmaE(y.dbsum.all,Z,sigmaB.hat,nis,m,d,N,q,delta=1e-4)
+
+  #cv for beta
+  if (length(tau.path) == 1){
+    beta.hat <- updateBeta(Y,X,Z,tau.path,gamma,sigmaB.hat,sigmaE.hat,nis,d,p,q,N,bootstrap.iter)
+    tau.optimal <- 0
+    l.tau <- 0
+  }
+  else {
+    for (fold in 1:folds) {
+      if (fold == 1){
+        y.test <- Y[1:cumsum(nis)[test.size],]
+        y.train <- Y[-c(1:cumsum(nis)[test.size]),]
+        x.test <- X[1:cumsum(nis)[test.size],]
+        x.train <- X[-c(1:cumsum(nis)[test.size]),]
+        z.test <- Z[1:cumsum(nis)[test.size], ((fold-1)*test.size*q+1):(fold*test.size*q)]
+        z.train <- Z[-c(1:cumsum(nis)[test.size]), -c(((fold-1)*test.size*q+1):(fold*test.size*q))]
+      }
+      else {
+        y.test <- Y[(cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size],]
+        y.train <- Y[-c((cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size]),]
+        x.test <- X[(cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size],]
+        x.train <- X[-c((cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size]),]
+        z.test <- Z[(cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size], ((fold-1)*test.size*q+1):(fold*test.size*q)]
+        z.train <- Z[-c((cumsum(nis)[(fold-1)* test.size]+1):cumsum(nis)[fold*test.size]), -c(((fold-1)*test.size*q+1):(fold*test.size*q))]
+      }
+      nis.test <- nis[((fold-1)*test.size+1):(fold*test.size)]
+      nis.train <- nis[-c(((fold-1)*test.size+1):(fold*test.size))]
+      bbeta <- solve(t(as.matrix(x.train)) %*% as.matrix(x.train), t(as.matrix(x.train)) %*% as.matrix(y.train))
+
+      bbeta.path <- beta.path(as.matrix(y.train),as.matrix(z.train),as.matrix(x.train),tau.path,gamma,sigmaB.hat,sigmaE.hat,bbeta,nis.train,d,p,q,bootstrap.iter)
+
+      for (tau.index in 1:length(tau.path)) {
+        l.tau[tau.index,fold] <- likelihood(as.matrix(y.test),as.matrix(z.test),as.matrix(x.test),
+                                            sigmaB.hat,sigmaE.hat,bbeta.path[[tau.index]],nis.test,d,q)
+      }
+      cat("Fold", fold, "tau completed\n")
+    }
+
+    l.max.index <- which.max(apply(l.tau, 1, mean))
+    tau.optimal <- tau.path[l.max.index]
+
+    beta.hat <- updateBeta(Y,X,Z,tau.optimal,gamma,sigmaB.hat,sigmaE.hat,nis,d,p,q,N,bootstrap.iter)
+  }
+
+
 
   if ((is.null(sigmaB) == TRUE) | (is.null(sigmaE) == TRUE) | (is.null(beta) == TRUE)){
-    return(list(lambda.optimal=lambda.optimal.list,tau.optimal=tau.optimal,l.lambda=l.lambda,l.tau=l.tau,SigmaB=sigmaB.hat,SigmaE=sigmaE.hat,beta=beta.hat))
+    return(list(lambda.optimal=lambda.optimal,tau.optimal=tau.optimal,l.lambda=l.lambda,l.tau=l.tau,SigmaB=sigmaB.hat,SigmaE=sigmaE.hat,beta=beta.hat))
   }
   else{
     fnorm.B <- norm(sigmaB-sigmaB.hat,"F")
@@ -277,7 +275,7 @@ MORES.cv <- function(Y,Z,X,lambda.path,tau.path,threshold=0.01,folds=5,id,gamma=
 
 
     return(list(fnorm.B=fnorm.B,F1.B=F1.B,fnorm.beta=fnorm.beta,F1.beta=F1.beta,
-                l.lambda=l.lambda,l.tau=l.tau,lambda.optimal=lambda.optimal.list,tau.optimal=tau.optimal,
+                l.lambda=l.lambda,l.tau=l.tau,lambda.optimal=lambda.optimal,tau.optimal=tau.optimal,
                 SigmaB=sigmaB.hat,SigmaE=sigmaE.hat,beta=beta.hat,true.sigmaB=sigmaB,true.sigmaE=sigmaE,true.beta=beta))
   }
 }

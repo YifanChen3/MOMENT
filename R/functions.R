@@ -35,6 +35,25 @@ prox.l1 <- function(A,eta,lambda){
   return(A)
 }
 
+largest_eigenvalue <- function(A){
+  if (nrow(A) <= 2){
+    return(as.numeric(norm(A, "2")))
+  }
+
+  diag.A <- Matrix::diag(A)
+  offdiag.A <- A
+  Matrix::diag(offdiag.A) <- 0
+  if (Matrix::nnzero(offdiag.A) == 0){
+    return(max(abs(diag.A)))
+  }
+
+  value <- tryCatch(
+    RSpectra::eigs(A, k = 1, which = "LM")$values,
+    error = function(e) as.numeric(norm(A, "2"))
+  )
+  return(as.numeric(value[1]))
+}
+
 # Find (i,j)-th index of y_ij from the big matrix Y
 yij <- function(i,j,nis){
   if (i == 1) {
@@ -83,12 +102,7 @@ updateSigmaB <- function(sigmaB=NULL,eta=NULL,ww.trisum,y.trisum,lambda.i,Y,Z,d,
     sigmaB <- Diagonal(d*q)
   }
   if (is.null(eta) == TRUE){
-    if (nrow(ww.trisum) <= 2){
-      L <- norm(ww.trisum,"2")
-    }
-    else{
-      L <- eigs(ww.trisum, k = 1, which = "LM")$values
-    }
+    L <- largest_eigenvalue(ww.trisum)
     eta <- 1/L
   }
 
@@ -132,12 +146,7 @@ estimateSigmaB <- function(sigmaB=NULL,eta=NULL,Y,X,Z,beta,delta,active.set.vec,
   zzy.trisum <- two.trisums$zzy
 
   if (is.null(eta) == TRUE){
-    if (nrow(z4.trisum) <= 2){
-      L <- norm(z4.trisum,"2")
-    }
-    else{
-      L <- eigs(z4.trisum, k = 1, which = "LM")$values
-    }
+    L <- largest_eigenvalue(z4.trisum)
     eta <- 1/L
   }
   while (iter < max.iter) {
@@ -176,31 +185,50 @@ sigmaT <- function(Z,sigmaB,sigmaE,nis,d,q){
   for (i in 1:m) {
     sigma.list[[i]] <- cov_yi(as.matrix(Z),as.matrix(sigmaB),sigmaE,nis,i,d,q)
   }
-  result <- as.matrix(bdiag(sigma.list))
+  result <- bdiag(sigma.list)
   return(result)
 }
 
 updateBeta <- function(Y,X,Z,tau,gamma,sigmaB,sigmaE,nis,d,p,q,N,bootstrap.iter=30){
   XI <- kronecker(X,Diagonal(d))
   sigma.t.base <- sigmaT(Z,sigmaB,sigmaE,nis,d,q)
-  sigma.t.base <- as(sigma.t.base,"dgCMatrix")
   result <- matrix(0,nrow = d,ncol = p)
   select.count <- numeric(d * p)
 
-  for (i in 1:bootstrap.iter) {
-    sigma.t <- sigma.t.base + gamma * diag(N*d) #Updated here
-    vec.Y.t <- as.vector(t(Y)) + rnorm(N*d,0,sqrt(gamma)) #Updated here, also the parameter of this function
-    U <- chol(sigma.t)
-    x.tilda <- solve(t(U), XI)
-    y.tilda <- solve(t(U), vec.Y.t)
-    beta.vec <- solve(crossprod(x.tilda), crossprod(x.tilda, y.tilda))
+  if (sum(X[,1] != 1) != 0){
+    for (i in 1:bootstrap.iter) {
+      sigma.t <- sigma.t.base + gamma * Diagonal(N*d)
+      vec.Y.t <- as.vector(t(Y)) + rnorm(N*d,0,sqrt(gamma)) #Updated here, also the parameter of this function
+      U <- chol(sigma.t)
+      x.tilda <- solve(t(U), XI)
+      y.tilda <- solve(t(U), vec.Y.t)
+      beta.vec <- solve(crossprod(x.tilda), crossprod(x.tilda, y.tilda))
 
-    weights <- 1/(abs(beta.vec)+1e-8)
-    model <- glmnet(x.tilda,y.tilda,alpha = 1,lambda = tau,penalty.factor = weights)
-    beta.hat <- model$beta
-    select.count[which(beta.hat != 0)] <- select.count[which(beta.hat != 0)] + 1
-    result <- result + matrix(beta.hat, nrow = d)
+      weights <- 1/(abs(beta.vec)+1e-8)
+      model <- glmnet(x.tilda,y.tilda,alpha = 1,lambda = tau,penalty.factor = weights,intercept = FALSE)
+      beta.hat <- model$beta
+      select.count[which(beta.hat != 0)] <- select.count[which(beta.hat != 0)] + 1
+      result <- result + matrix(beta.hat, nrow = d)
+    }
   }
+  else{
+    for (i in 1:bootstrap.iter) {
+      sigma.t <- sigma.t.base + gamma * Diagonal(N*d)
+      vec.Y.t <- as.vector(t(Y)) + rnorm(N*d,0,sqrt(gamma)) #Updated here, also the parameter of this function
+      U <- chol(sigma.t)
+      x.tilda <- solve(t(U), XI)
+      y.tilda <- solve(t(U), vec.Y.t)
+      beta.vec <- solve(crossprod(x.tilda), crossprod(x.tilda, y.tilda))
+
+      weights <- 1/(abs(beta.vec)+1e-8)
+      weights[1:d] <- 0
+      model <- glmnet(x.tilda,y.tilda,alpha = 1,lambda = tau,penalty.factor = weights,intercept = FALSE)
+      beta.hat <- model$beta
+      select.count[which(beta.hat != 0)] <- select.count[which(beta.hat != 0)] + 1
+      result <- result + matrix(beta.hat, nrow = d)
+    }
+  }
+
   result <- result/bootstrap.iter
   support <- which(select.count >= (bootstrap.iter - 1))
   result[setdiff(c(1:(d*p)),support)] <- 0
@@ -214,7 +242,6 @@ likelihood <- function(Y,Z,X,sigmaB,sigmaE,beta,nis,d,q){
   result <- N * d * log(2 * pi)
 
   sigma.t <- sigmaT(Z,sigmaB,sigmaE,nis,d,q)
-  sigma.t <- as(sigma.t,"dgCMatrix")
   result <- result + determinant(sigma.t, logarithm = TRUE)$modulus[1]
 
   y.mu <- matrix(as.vector(t(Y)) - kronecker(X,Diagonal(d)) %*% as.vector(t(beta)),ncol=1)
@@ -245,10 +272,10 @@ sigma.path <- function(Y,Z,X,lambda.path,eta,nis,d,q,weight,ww.trisum,y.trisum,y
     index <- index + 1
     lambda.weight <- lambda * diag(weight)
     if (index == 1){
-      sigmaB.sol <- updateSigmaB(sigmaB.path[[1]],eta,ww.trisum,y.trisum,lambda.weight,Y,Z,d=1,q,delta=0,max.iterB,tolB)
+      sigmaB.sol <- updateSigmaB(sigmaB.path[[1]],eta,ww.trisum,y.trisum,lambda.weight,Y,Z,d,q,delta=0,max.iterB,tolB)
     }
     else{
-      sigmaB.sol <- updateSigmaB(sigmaB.path[[index-1]],eta,ww.trisum,y.trisum,lambda.weight,Y,Z,d=1,q,delta=0,max.iterB,tolB)
+      sigmaB.sol <- updateSigmaB(sigmaB.path[[index-1]],eta,ww.trisum,y.trisum,lambda.weight,Y,Z,d,q,delta=0,max.iterB,tolB)
     }
     sigmaB <- sigmaB.sol$sigmaB
     sigmaE <- updateSigmaE(y.dbsum,Z,sigmaB,nis,m,d,N,q,delta=1e-4)
@@ -266,21 +293,38 @@ beta.path <- function(Y,Z,X,tau.path,gamma,sigmaB,sigmaE,beta,nis,d,p,q,bootstra
 
   XI <- kronecker(X,Diagonal(d))
   sigma.t.base <- sigmaT(Z,sigmaB,sigmaE,nis,d,q)
-  sigma.t.base <- as(sigma.t.base,"dgCMatrix")
   beta.matrix <- matrix(0,nrow = d*p,ncol = length(tau.path))
 
-  for (i in 1:bootstrap.iter) {
-    sigma.t <- sigma.t.base + gamma * diag(N*d)
-    vec.Y.t <- as.vector(t(Y)) + rnorm(N*d,0,sqrt(gamma))
-    U <- chol(sigma.t)
-    x.tilda <- solve(t(U), XI)
-    y.tilda <- solve(t(U), vec.Y.t)
-    beta.vec <- solve(crossprod(x.tilda), crossprod(x.tilda, y.tilda))
+  if (sum(X[,1] != 1) != 0){
+    for (i in 1:bootstrap.iter) {
+      sigma.t <- sigma.t.base + gamma * Diagonal(N*d)
+      vec.Y.t <- as.vector(t(Y)) + rnorm(N*d,0,sqrt(gamma))
+      U <- chol(sigma.t)
+      x.tilda <- solve(t(U), XI)
+      y.tilda <- solve(t(U), vec.Y.t)
+      beta.vec <- solve(crossprod(x.tilda), crossprod(x.tilda, y.tilda))
 
-    weights <- 1/(abs(beta.vec)+1e-8)
-    model <- glmnet(x.tilda,y.tilda,alpha = 1,lambda = tau.path,penalty.factor = weights)
-    beta.matrix <- beta.matrix + model$beta
+      weights <- 1/(abs(beta.vec)+1e-8)
+      model <- glmnet(x.tilda,y.tilda,alpha = 1,lambda = tau.path,penalty.factor = weights,intercept = FALSE)
+      beta.matrix <- beta.matrix + model$beta
+    }
   }
+  else{
+    for (i in 1:bootstrap.iter) {
+      sigma.t <- sigma.t.base + gamma * Diagonal(N*d)
+      vec.Y.t <- as.vector(t(Y)) + rnorm(N*d,0,sqrt(gamma))
+      U <- chol(sigma.t)
+      x.tilda <- solve(t(U), XI)
+      y.tilda <- solve(t(U), vec.Y.t)
+      beta.vec <- solve(crossprod(x.tilda), crossprod(x.tilda, y.tilda))
+
+      weights <- 1/(abs(beta.vec)+1e-8)
+      weights[1:d] <- 0
+      model <- glmnet(x.tilda,y.tilda,alpha = 1,lambda = tau.path,penalty.factor = weights,intercept = FALSE)
+      beta.matrix <- beta.matrix + model$beta
+    }
+  }
+
   beta.matrix <- beta.matrix/bootstrap.iter
 
 
@@ -292,5 +336,3 @@ beta.path <- function(Y,Z,X,tau.path,gamma,sigmaB,sigmaE,beta,nis,d,p,q,bootstra
   }
   return(bbeta.path)
 }
-
-

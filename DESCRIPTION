@@ -1,9 +1,9 @@
-Package: MORES
-Title: Moment-based Selection in Multivariate High-Dimensional Mixed-Effect Models
-Version: 0.0.6
+Package: MOMENT
+Title: Moment-based Selection in Multivariate Linear Mixed-Effect Models
+Version: 0.2.0
 Authors@R: 
     person("Yifan", "Chen", , "ychen300@ucsb.edu", role = c("aut", "cre"))
-Description: We propose a moment-based variable selection method for multivariate high-dimensional linear mixed-effects model. By formulating moment equations for cross-products of residuals and inducing sparsity in the covariance matrix of random effects through its diagonal, we reduce the selection problem to a set of smooth convex optimization problems solvable via proximal gradient descent.
+Description: We propose a moment-based variable selection method for multivariate linear mixed-effects models. By formulating moment equations for cross-products of residuals and inducing sparsity in the covariance matrix of random effects through its diagonal, we reduce the selection problem to a set of smooth convex optimization problems solvable via proximal gradient descent.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -22,5 +22,5 @@ Suggests:
     rmarkdown,
     MASS
 VignetteBuilder: knitr
-URL: https://github.com/YifanChen3/multiLMMsel
-BugReports: https://github.com/YifanChen3/multiLMMsel/issues
+URL: https://github.com/YifanChen3/MOMENT
+BugReports: https://github.com/YifanChen3/MOMENT/issues
